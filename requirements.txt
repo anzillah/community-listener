@@ -1,0 +1,22 @@
+# Community Support Listener — Python dependencies
+
+# RSS feed parsing
+feedparser>=6.0.10
+
+# Discord bot
+discord.py>=2.3.2
+
+# Google Play reviews
+google-play-scraper>=1.2.4
+
+# HTTP client (iOS reviews, Help Scout API)
+requests>=2.31.0
+
+# Job scheduler for RSS/review polling
+APScheduler>=3.10.4
+
+# .env file support
+python-dotenv>=1.0.0
+
+# LLM summaries (optional — ticket subjects/summaries fall back to plain text if absent)
+anthropic>=0.20.0

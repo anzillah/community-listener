@@ -1,0 +1,27 @@
+version: 1
+name: "Community Listener"
+description: "Discord bot forwarding community messages to Help Scout"
+
+services:
+  discord:
+    app:
+      build:
+        dockerfile: "Dockerfile"
+        context: "."
+    processes:
+      worker: 1
+    env:
+      HELPSCOUT_CLIENT_ID: "${ENV.HELPSCOUT_CLIENT_ID}"
+      HELPSCOUT_CLIENT_SECRET: "${ENV.HELPSCOUT_CLIENT_SECRET}"
+      HELPSCOUT_MAILBOX_ID: "${ENV.HELPSCOUT_MAILBOX_ID}"
+      DISCORD_TOKEN: "${ENV.DISCORD_TOKEN}"
+      DISCORD_CHANNEL_ID: "${ENV.DISCORD_CHANNEL_ID}"
+      IOS_APP_ID: "${ENV.IOS_APP_ID}"
+      ANDROID_APP_ID: "${ENV.ANDROID_APP_ID}"
+      APPBOT_IOS_APP_IDS: "${ENV.APPBOT_IOS_APP_IDS}"
+      APPBOT_ANDROID_APP_IDS: "${ENV.APPBOT_ANDROID_APP_IDS}"
+      BSKY_HANDLE: "${ENV.BSKY_HANDLE}"
+      BSKY_APP_PASSWORD: "${ENV.BSKY_APP_PASSWORD}"
+      GITHUB_REPOS: "${ENV.GITHUB_REPOS}"
+      GITHUB_TOKEN: "${ENV.GITHUB_TOKEN}"
+      ANTHROPIC_API_KEY: "${ENV.ANTHROPIC_API_KEY}"
