@@ -43,6 +43,12 @@ ANDROID_APP_IDS: list[str] = [x.strip() for x in _raw_android.split(",") if x.st
 if not ANDROID_APP_IDS:
     raise RuntimeError("Missing required env var: ANDROID_APP_IDS")
 
+# Google Play Developer API (replaces google-play-scraper for full review access)
+# Service account JSON string — paste the entire contents of your .json key file.
+# The service account must have Play Developer API access granted in Play Console.
+# Leave blank to fall back to the legacy scraper (limited coverage).
+GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "")
+
 # Reddit (public JSON API — no credentials required)
 # One conversation per thread; comments added as replies.
 # Leave REDDIT_SUBREDDIT blank to disable the Reddit collector.

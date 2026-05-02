@@ -6,7 +6,11 @@ feedparser>=6.0.10
 # Discord bot
 discord.py>=2.3.2
 
-# Google Play reviews
+# Google Play reviews — official Developer API (full coverage)
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+
+# Google Play reviews — scraper fallback (limited coverage, no credentials needed)
 google-play-scraper>=1.2.4
 
 # HTTP client (iOS reviews, Help Scout API)
