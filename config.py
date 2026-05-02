@@ -56,7 +56,6 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "CommunityListener/1.0 (by Re
 REDDIT_SUBREDDIT = os.getenv("REDDIT_SUBREDDIT", "readwise")
 _raw_thread_ids = os.getenv("REDDIT_THREAD_IDS", "")
 REDDIT_THREAD_IDS: list[str] = [x.strip() for x in _raw_thread_ids.split(",") if x.strip()]
-REDDIT_NEW_POSTS_LIMIT = int(os.getenv("REDDIT_NEW_POSTS_LIMIT", "25"))
 
 # AppBot review links (optional — falls back to App Store / Play Store URLs)
 # Parallel to IOS_APP_IDS / ANDROID_APP_IDS: index 0 maps to index 0, etc.

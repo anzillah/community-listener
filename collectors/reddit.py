@@ -12,7 +12,7 @@ One conversation per Reddit thread:
 
 Monitors each poll cycle:
   1. The two stickied posts (auto-discovered — handles monthly rotation)
-  2. Recent posts via /r/{sub}/new (limit=REDDIT_NEW_POSTS_LIMIT)
+  2. Recent posts via /r/{sub}/new (paginated until caught up, cap=500)
   3. Any extra thread IDs listed in REDDIT_THREAD_IDS
 
 Auto-tags:
@@ -126,13 +126,56 @@ def _flatten_listing(listing: dict, out: list) -> None:
         # kind == "more" → collapsed threads, skip
 
 
-def _fetch_new_posts(subreddit: str, limit: int) -> list[_Submission]:
-    data = _get(f"/r/{subreddit}/new.json", {"limit": limit})
-    return [
-        _parse_sub(c["data"])
-        for c in data.get("data", {}).get("children", [])
-        if c.get("kind") == "t3"
-    ]
+def _fetch_new_posts(subreddit: str, max_posts: int = 500) -> list[_Submission]:
+    """
+    Fetch recent posts from /r/{sub}/new, paginating with Reddit's ``after``
+    token until one of these stop conditions is met (whichever comes first):
+
+    * A post that's already been processed is encountered — we're caught up.
+    * ``max_posts`` total posts have been collected (safety cap).
+    * Reddit returns an empty page or no ``after`` token.
+
+    On a steady 10-minute poll cycle only the first page is usually needed.
+    On gap recovery (e.g. after an outage) the collector pages back as far as
+    necessary without missing anything.
+    """
+    posts: list[_Submission] = []
+    after: str | None = None
+
+    while len(posts) < max_posts:
+        params: dict = {"limit": 100}          # 100 is Reddit's per-page max
+        if after:
+            params["after"] = after
+
+        data = _get(f"/r/{subreddit}/new.json", params)
+        listing = data.get("data", {})
+        children = listing.get("children", [])
+
+        if not children:
+            break
+
+        caught_up = False
+        for child in children:
+            if child.get("kind") != "t3":
+                continue
+            sub = _parse_sub(child["data"])
+            if is_processed(sub.id, SOURCE_POST):
+                # Posts are newest-first; once we see a processed one the rest
+                # are older and already handled.
+                caught_up = True
+                break
+            posts.append(sub)
+            if len(posts) >= max_posts:
+                break
+
+        if caught_up:
+            break
+
+        after = listing.get("after")
+        if not after:
+            break
+
+    return posts
 
 
 def _fetch_sticky(subreddit: str, num: int) -> Optional[_Submission]:
@@ -371,9 +414,9 @@ def collect(client: HelpScoutClient) -> None:
         if s:
             submissions[s.id] = s
 
-    # 2. Recent new posts
+    # 2. Recent new posts — paginate until caught up (see _fetch_new_posts)
     try:
-        for post in _fetch_new_posts(sub, config.REDDIT_NEW_POSTS_LIMIT):
+        for post in _fetch_new_posts(sub):
             submissions.setdefault(post.id, post)
     except Exception as exc:
         logger.error("Error fetching new posts from r/%s: %s", sub, exc)
