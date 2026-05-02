@@ -199,8 +199,19 @@ def _fetch_thread(subreddit: str, thread_id: str) -> Optional[_Submission]:
 
 
 def _fetch_comments(subreddit: str, thread_id: str) -> list[_Comment]:
+    """
+    Fetch comments for *thread_id*, sorted newest-first.
+
+    ``sort=new`` is critical for megathreads: with the default ``confidence``
+    sort, fresh replies are buried behind hundreds of older highly-voted
+    comments and may fall outside the 500-item limit.  Sorting by ``new``
+    guarantees the most recent comments are always returned first.
+    """
     try:
-        data = _get(f"/r/{subreddit}/comments/{thread_id}.json", {"limit": 500})
+        data = _get(
+            f"/r/{subreddit}/comments/{thread_id}.json",
+            {"limit": 500, "sort": "new"},
+        )
         comments: list[_Comment] = []
         _flatten_listing(data[1], comments)  # data[1] is the comments listing
         return comments
