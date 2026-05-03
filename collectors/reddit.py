@@ -28,6 +28,7 @@ import html as html_lib
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -65,6 +66,7 @@ class _Submission:
     selftext: str
     permalink: str
     author: Optional[str]   # None = deleted / unavailable
+    created_utc: float = 0.0
 
 
 @dataclass
@@ -74,6 +76,7 @@ class _Comment:
     permalink: str
     parent_id: str          # e.g. "t1_abc123" or "t3_xyz"
     author: Optional[str]   # None = deleted / unavailable
+    created_utc: float = 0.0
 
 
 # ── Reddit JSON API helpers ───────────────────────────────────────────────────
@@ -100,6 +103,7 @@ def _parse_sub(data: dict) -> _Submission:
         selftext=data.get("selftext", "") or "",
         permalink=data.get("permalink", ""),
         author=raw_author if raw_author and raw_author != "[deleted]" else None,
+        created_utc=float(data.get("created_utc", 0)),
     )
 
 
@@ -111,6 +115,7 @@ def _parse_comment(data: dict) -> _Comment:
         permalink=data.get("permalink", ""),
         parent_id=data.get("parent_id", ""),
         author=raw_author if raw_author and raw_author != "[deleted]" else None,
+        created_utc=float(data.get("created_utc", 0)),
     )
 
 
@@ -126,24 +131,26 @@ def _flatten_listing(listing: dict, out: list) -> None:
         # kind == "more" → collapsed threads, skip
 
 
-def _fetch_new_posts(subreddit: str, max_posts: int = 500) -> list[_Submission]:
+def _fetch_new_posts(subreddit: str, lookback_seconds: int = 3600) -> list[_Submission]:
     """
-    Fetch recent posts from /r/{sub}/new, paginating with Reddit's ``after``
-    token until one of these stop conditions is met (whichever comes first):
+    Fetch posts from /r/{sub}/new that are newer than *lookback_seconds* ago.
 
-    * A post that's already been processed is encountered — we're caught up.
-    * ``max_posts`` total posts have been collected (safety cap).
+    Stop conditions (whichever fires first):
+    * Post's ``created_utc`` is older than the lookback window — time-based
+      cutoff that works even when the local DB is empty or was just reset.
+    * A post already in the DB is encountered — belt-and-suspenders dedup.
     * Reddit returns an empty page or no ``after`` token.
 
-    On a steady 10-minute poll cycle only the first page is usually needed.
-    On gap recovery (e.g. after an outage) the collector pages back as far as
-    necessary without missing anything.
+    Using a time-based cutoff (default 1 hour = 6× the 10-min poll cycle)
+    means the collector is robust to cloud workspace resets: it never tries
+    to backfill hundreds of historical posts in a single run.
     """
+    cutoff = datetime.now(timezone.utc).timestamp() - lookback_seconds
     posts: list[_Submission] = []
     after: str | None = None
 
-    while len(posts) < max_posts:
-        params: dict = {"limit": 100}          # 100 is Reddit's per-page max
+    while True:
+        params: dict = {"limit": 100}
         if after:
             params["after"] = after
 
@@ -154,21 +161,22 @@ def _fetch_new_posts(subreddit: str, max_posts: int = 500) -> list[_Submission]:
         if not children:
             break
 
-        caught_up = False
+        done = False
         for child in children:
             if child.get("kind") != "t3":
                 continue
             sub = _parse_sub(child["data"])
+            if sub.created_utc and sub.created_utc < cutoff:
+                # Posts come newest-first; once we're past the window the
+                # rest are even older — stop paging.
+                done = True
+                break
             if is_processed(sub.id, SOURCE_POST):
-                # Posts are newest-first; once we see a processed one the rest
-                # are older and already handled.
-                caught_up = True
+                done = True
                 break
             posts.append(sub)
-            if len(posts) >= max_posts:
-                break
 
-        if caught_up:
+        if done:
             break
 
         after = listing.get("after")
@@ -198,23 +206,31 @@ def _fetch_thread(subreddit: str, thread_id: str) -> Optional[_Submission]:
         return None
 
 
-def _fetch_comments(subreddit: str, thread_id: str) -> list[_Comment]:
+def _fetch_comments(
+    subreddit: str, thread_id: str, lookback_seconds: int = 3600
+) -> list[_Comment]:
     """
-    Fetch comments for *thread_id*, sorted newest-first.
+    Fetch comments for *thread_id*, sorted newest-first, limited to the
+    lookback window.
 
     ``sort=new`` is critical for megathreads: with the default ``confidence``
     sort, fresh replies are buried behind hundreds of older highly-voted
     comments and may fall outside the 500-item limit.  Sorting by ``new``
     guarantees the most recent comments are always returned first.
+
+    The time-based filter mirrors ``_fetch_new_posts``: even if the local DB
+    is empty, we never re-process thousands of old comments on every run.
     """
     try:
         data = _get(
             f"/r/{subreddit}/comments/{thread_id}.json",
             {"limit": 500, "sort": "new"},
         )
-        comments: list[_Comment] = []
-        _flatten_listing(data[1], comments)  # data[1] is the comments listing
-        return comments
+        all_comments: list[_Comment] = []
+        _flatten_listing(data[1], all_comments)
+
+        cutoff = datetime.now(timezone.utc).timestamp() - lookback_seconds
+        return [c for c in all_comments if not c.created_utc or c.created_utc >= cutoff]
     except Exception as exc:
         logger.error("Error fetching comments for thread %s: %s", thread_id, exc)
         return []
