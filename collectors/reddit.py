@@ -131,7 +131,7 @@ def _flatten_listing(listing: dict, out: list) -> None:
         # kind == "more" → collapsed threads, skip
 
 
-def _fetch_new_posts(subreddit: str, lookback_seconds: int = 3600) -> list[_Submission]:
+def _fetch_new_posts(subreddit: str, lookback_seconds: int = 86400) -> list[_Submission]:
     """
     Fetch posts from /r/{sub}/new that are newer than *lookback_seconds* ago.
 
@@ -141,9 +141,9 @@ def _fetch_new_posts(subreddit: str, lookback_seconds: int = 3600) -> list[_Subm
     * A post already in the DB is encountered — belt-and-suspenders dedup.
     * Reddit returns an empty page or no ``after`` token.
 
-    Using a time-based cutoff (default 1 hour = 6× the 10-min poll cycle)
-    means the collector is robust to cloud workspace resets: it never tries
-    to backfill hundreds of historical posts in a single run.
+    Using a time-based cutoff (default 24 hours) means the collector is
+    robust to cloud workspace resets and multi-hour outages: it never tries
+    to backfill weeks of historical posts, but handles gaps up to a day.
     """
     cutoff = datetime.now(timezone.utc).timestamp() - lookback_seconds
     posts: list[_Submission] = []
@@ -207,7 +207,7 @@ def _fetch_thread(subreddit: str, thread_id: str) -> Optional[_Submission]:
 
 
 def _fetch_comments(
-    subreddit: str, thread_id: str, lookback_seconds: int = 3600
+    subreddit: str, thread_id: str, lookback_seconds: int = 86400
 ) -> list[_Comment]:
     """
     Fetch comments for *thread_id*, sorted newest-first, limited to the
