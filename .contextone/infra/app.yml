@@ -10,6 +10,7 @@ services:
         context: "."
     processes:
       worker: 1
+      poller: 1
     env:
       HELPSCOUT_CLIENT_ID: "${ENV.HELPSCOUT_CLIENT_ID}"
       HELPSCOUT_CLIENT_SECRET: "${ENV.HELPSCOUT_CLIENT_SECRET}"
