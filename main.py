@@ -117,6 +117,17 @@ def run_service(client: HelpScoutClient) -> None:
 
 
 def main() -> None:
+    # Write a timestamped entry to run_log.txt so we can verify scheduled
+    # cloud runs are actually executing this file (not failing before import).
+    import os as _os
+    _log_path = _os.path.join(_os.path.dirname(__file__) or ".", "run_log.txt")
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        with open(_log_path, "a") as _f:
+            _f.write(f"{_dt.now(_tz.utc).isoformat()} start\n")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(description="Community Support Listener")
     parser.add_argument(
         "--once",
