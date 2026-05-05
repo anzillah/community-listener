@@ -8,15 +8,14 @@ Channels are set via DISCORD_CHANNEL_IDS (comma-separated) in .env.
 Requires the MESSAGE_CONTENT privileged intent to be enabled in the
 Discord Developer Portal → Bot → Privileged Gateway Intents.
 
-When `pollers` are supplied to run_bot(), they are scheduled as a
-discord.ext.tasks background loop running within the bot's asyncio event
-loop, avoiding the threading issues of APScheduler BackgroundScheduler.
+When `pollers` are supplied to run_bot(), they are scheduled as a plain
+asyncio.create_task background loop within the bot's asyncio event loop,
+avoiding the threading issues of APScheduler BackgroundScheduler.
 """
 import asyncio
 import logging
 
 import discord
-from discord.ext import tasks
 
 import config
 from db import is_processed, mark_processed
@@ -61,20 +60,29 @@ def run_bot(client: HelpScoutClient, pollers=None) -> None:
     bot = discord.Client(intents=intents)
     _pollers = list(pollers or [])
 
-    # ── Background polling task ───────────────────────────────────────────────
-    @tasks.loop(minutes=config.POLL_INTERVAL_MINUTES)
-    async def _poll_all() -> None:
-        """Run all polled collectors sequentially in a thread executor."""
-        loop = asyncio.get_running_loop()
-        for module, name in _pollers:
-            try:
-                await loop.run_in_executor(None, module.collect, client)
-            except Exception as exc:
-                logger.error("Poller failed for %s: %s", name, exc)
+    # ── Background polling loop ───────────────────────────────────────────────
+    async def _poll_loop() -> None:
+        """Async task: poll all collectors every POLL_INTERVAL_MINUTES minutes.
 
-    @_poll_all.before_loop
-    async def _before_poll_all() -> None:
+        Waits for the bot to be ready, then immediately runs an initial pass,
+        then sleeps for the interval and repeats forever.
+        """
         await bot.wait_until_ready()
+        loop = asyncio.get_running_loop()
+        interval = config.POLL_INTERVAL_MINUTES * 60  # seconds
+        logger.info(
+            "Poller loop started — running %d collector(s) every %d min",
+            len(_pollers), config.POLL_INTERVAL_MINUTES,
+        )
+        while True:
+            logger.info("Poller tick: running %d collector(s)…", len(_pollers))
+            for module, name in _pollers:
+                try:
+                    await loop.run_in_executor(None, module.collect, client)
+                except Exception as exc:
+                    logger.error("Poller failed for %s: %s", name, exc)
+            logger.info("Poller tick complete. Next run in %d min.", config.POLL_INTERVAL_MINUTES)
+            await asyncio.sleep(interval)
 
     # ── Discord event handlers ────────────────────────────────────────────────
 
@@ -125,14 +133,9 @@ def run_bot(client: HelpScoutClient, pollers=None) -> None:
     async def on_ready() -> None:
         logger.info("Discord bot connected as %s (id=%s)", bot.user, bot.user.id)
 
-        # Start background pollers (Reddit, iOS/Android reviews, Bluesky, GitHub).
-        # The task fires immediately on start, then every POLL_INTERVAL_MINUTES.
-        if _pollers and not _poll_all.is_running():
-            logger.info(
-                "Starting poller task — %d collector(s) every %d min",
-                len(_pollers), config.POLL_INTERVAL_MINUTES,
-            )
-            _poll_all.start()
+        # Start the background polling loop as an asyncio task.
+        if _pollers:
+            asyncio.create_task(_poll_loop(), name="community-poller")
 
         # Backfill: sweep each monitored channel for recent messages the bot
         # missed while it was offline. Looks back up to 200 messages per channel.
