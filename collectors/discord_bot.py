@@ -7,11 +7,16 @@ Channels are set via DISCORD_CHANNEL_IDS (comma-separated) in .env.
 
 Requires the MESSAGE_CONTENT privileged intent to be enabled in the
 Discord Developer Portal → Bot → Privileged Gateway Intents.
+
+When `pollers` are supplied to run_bot(), they are scheduled as a
+discord.ext.tasks background loop running within the bot's asyncio event
+loop, avoiding the threading issues of APScheduler BackgroundScheduler.
 """
 import asyncio
 import logging
 
 import discord
+from discord.ext import tasks
 
 import config
 from db import is_processed, mark_processed
@@ -43,12 +48,35 @@ def _should_forward(content: str) -> bool:
     return any(kw in lower for kw in _TRIGGER_KEYWORDS)
 
 
-def run_bot(client: HelpScoutClient) -> None:
-    """Blocking call — run this in a dedicated thread."""
+def run_bot(client: HelpScoutClient, pollers=None) -> None:
+    """Blocking call — run the Discord bot.
+
+    pollers: optional list of (module, name) pairs whose .collect(client)
+             will be called on a fixed interval via discord.ext.tasks,
+             running inside the bot's asyncio event loop.
+    """
     intents = discord.Intents.default()
     intents.message_content = True  # privileged intent
 
     bot = discord.Client(intents=intents)
+    _pollers = list(pollers or [])
+
+    # ── Background polling task ───────────────────────────────────────────────
+    @tasks.loop(minutes=config.POLL_INTERVAL_MINUTES)
+    async def _poll_all() -> None:
+        """Run all polled collectors sequentially in a thread executor."""
+        loop = asyncio.get_running_loop()
+        for module, name in _pollers:
+            try:
+                await loop.run_in_executor(None, module.collect, client)
+            except Exception as exc:
+                logger.error("Poller failed for %s: %s", name, exc)
+
+    @_poll_all.before_loop
+    async def _before_poll_all() -> None:
+        await bot.wait_until_ready()
+
+    # ── Discord event handlers ────────────────────────────────────────────────
 
     async def _forward_message(message: discord.Message) -> None:
         """Process a single Discord message → Help Scout ticket (shared by on_ready and on_message)."""
@@ -96,6 +124,15 @@ def run_bot(client: HelpScoutClient) -> None:
     @bot.event
     async def on_ready() -> None:
         logger.info("Discord bot connected as %s (id=%s)", bot.user, bot.user.id)
+
+        # Start background pollers (Reddit, iOS/Android reviews, Bluesky, GitHub).
+        # The task fires immediately on start, then every POLL_INTERVAL_MINUTES.
+        if _pollers and not _poll_all.is_running():
+            logger.info(
+                "Starting poller task — %d collector(s) every %d min",
+                len(_pollers), config.POLL_INTERVAL_MINUTES,
+            )
+            _poll_all.start()
 
         # Backfill: sweep each monitored channel for recent messages the bot
         # missed while it was offline. Looks back up to 200 messages per channel.

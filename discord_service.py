@@ -1,8 +1,10 @@
 """
-Discord service entry point — runs the Discord bot as a persistent process
-alongside APScheduler-based pollers (Reddit, iOS/Android reviews, Bluesky,
-GitHub).  Everything runs in one process so logs are unified and there are no
-subshell / background-process capture issues.
+Discord service entry point — runs the Discord bot as a persistent process.
+
+All polled collectors (Reddit, iOS/Android reviews, Bluesky, GitHub) are
+scheduled via discord.ext.tasks inside the bot's own asyncio event loop.
+This eliminates the threading complications that prevented APScheduler's
+BackgroundScheduler from firing reliably in this container environment.
 
 Usage:
   python discord_service.py
@@ -10,9 +12,6 @@ Usage:
 import logging
 import sys
 import time
-
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
 import config
 import db
@@ -43,44 +42,6 @@ _POLLED = [
 ]
 
 
-def _start_pollers(client: HelpScoutClient) -> BackgroundScheduler:
-    """Start APScheduler for all polled collectors and run an immediate pass."""
-    scheduler = BackgroundScheduler(
-        job_defaults={
-            "max_instances": 1,
-            "misfire_grace_time": 60,
-            "coalesce": True,
-        }
-    )
-    trigger = IntervalTrigger(minutes=config.POLL_INTERVAL_MINUTES)
-
-    for module, job_id in _POLLED:
-        scheduler.add_job(
-            module.collect,
-            trigger,
-            args=[client],
-            id=job_id,
-            name=job_id.replace("_", " ").title(),
-        )
-
-    scheduler.start()
-    logger.info(
-        "Poller scheduler started — every %d min (%s)",
-        config.POLL_INTERVAL_MINUTES,
-        ", ".join(j for _, j in _POLLED),
-    )
-
-    # Run all collectors immediately so we don't wait one full interval
-    logger.info("Running initial collection pass…")
-    for module, name in _POLLED:
-        try:
-            module.collect(client)
-        except Exception as exc:
-            logger.error("Initial collection failed for %s: %s", name, exc)
-
-    return scheduler
-
-
 def main() -> None:
     db.init_db()
 
@@ -90,16 +51,16 @@ def main() -> None:
         mailbox_id=config.HELPSCOUT_MAILBOX_ID,
     )
 
-    scheduler = _start_pollers(client)
-
     backoff = 30
     while True:
         try:
-            logger.info("Starting Discord bot…")
-            discord_bot.run_bot(client)
+            logger.info(
+                "Starting Discord bot (%d poller(s), every %d min)…",
+                len(_POLLED), config.POLL_INTERVAL_MINUTES,
+            )
+            discord_bot.run_bot(client, pollers=_POLLED)
         except KeyboardInterrupt:
             logger.info("Interrupted — exiting.")
-            scheduler.shutdown(wait=False)
             break
         except Exception as exc:
             logger.error("Discord bot crashed (%s) — restarting in %ds", exc, backoff)
