@@ -49,10 +49,20 @@ if not ANDROID_APP_IDS:
 # Leave blank to fall back to the legacy scraper (limited coverage).
 GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "")
 
-# Reddit (public JSON API — no credentials required)
+# Reddit
 # One conversation per thread; comments added as replies.
 # Leave REDDIT_SUBREDDIT blank to disable the Reddit collector.
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "CommunityListener/1.0 (by Readwise)")
+#
+# OAuth (recommended for cloud deployments — bypasses IP-based blocking):
+#   Create a "script" app at https://www.reddit.com/prefs/apps and set:
+#     REDDIT_CLIENT_ID     — the app's client ID (shown under the app name)
+#     REDDIT_CLIENT_SECRET — the app's secret
+#   When both are set the collector uses https://oauth.reddit.com (no IP blocks).
+#   When absent it falls back to the unauthenticated https://www.reddit.com API
+#   (may be blocked by Reddit on cloud/datacenter IPs).
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "python:com.readwise.communitylistener:v1.0 (by /u/angie-at-readwise)")
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 REDDIT_SUBREDDIT = os.getenv("REDDIT_SUBREDDIT", "readwise")
 _raw_thread_ids = os.getenv("REDDIT_THREAD_IDS", "")
 REDDIT_THREAD_IDS: list[str] = [x.strip() for x in _raw_thread_ids.split(",") if x.strip()]

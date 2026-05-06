@@ -1,9 +1,12 @@
 """
-Collector — Reddit (public JSON API), one Help Scout conversation per thread.
+Collector — Reddit, one Help Scout conversation per thread.
 
-Uses Reddit's public unauthenticated JSON endpoints — no OAuth app, no
-client_id, no client_secret required. Only REDDIT_SUBREDDIT needs to be set
-(defaults to "readwise").
+Supports two modes:
+  OAuth (recommended for cloud): set REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET.
+    Uses https://oauth.reddit.com — works from any IP, not subject to Reddit's
+    datacenter/cloud IP blocks.  Create a "script" app at reddit.com/prefs/apps.
+  Public JSON API (fallback): no credentials required, but blocked on many
+    cloud/datacenter IPs.  Only REDDIT_SUBREDDIT needs to be set.
 
 One conversation per Reddit thread:
   - Original post → new HS conversation (created immediately, even with 0 comments)
@@ -46,7 +49,54 @@ SOURCE = "reddit_comment"
 SOURCE_POST = "reddit_post"
 _TAG_PREFIX = "reddit-thread-"
 _BASE = "https://www.reddit.com"
+_OAUTH_BASE = "https://oauth.reddit.com"
 _RATE_DELAY = 1.1  # seconds between requests — Reddit asks for ~1 req/s without OAuth
+
+# ── Optional OAuth session ────────────────────────────────────────────────────
+
+_oauth_session: requests.Session | None = None
+_oauth_token_expiry: float = 0.0
+
+
+def _build_session() -> requests.Session | None:
+    """
+    Return an authenticated requests.Session when REDDIT_CLIENT_ID and
+    REDDIT_CLIENT_SECRET are set in config, or None to use the public API.
+
+    Uses Reddit's client-credentials grant (no user login required).
+    Token is cached and refreshed automatically when it expires.
+    """
+    global _oauth_session, _oauth_token_expiry
+
+    if not config.REDDIT_CLIENT_ID or not config.REDDIT_CLIENT_SECRET:
+        return None  # Fall back to public API
+
+    now = time.time()
+    if _oauth_session and now < _oauth_token_expiry - 60:
+        return _oauth_session  # Reuse cached session
+
+    # Fetch a new access token
+    resp = requests.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(config.REDDIT_CLIENT_ID, config.REDDIT_CLIENT_SECRET),
+        data={"grant_type": "client_credentials"},
+        headers={"User-Agent": config.REDDIT_USER_AGENT},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    token_data = resp.json()
+    access_token = token_data["access_token"]
+    expires_in = token_data.get("expires_in", 3600)
+
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {access_token}",
+        "User-Agent": config.REDDIT_USER_AGENT,
+    })
+    _oauth_session = session
+    _oauth_token_expiry = now + expires_in
+    logger.info("Reddit: obtained OAuth token (expires in %ds)", expires_in)
+    return session
 
 # Team Reddit accounts — comments from these users are never forwarded to Help Scout.
 _TEAM_ACCOUNTS: frozenset[str] = frozenset({
@@ -82,14 +132,32 @@ class _Comment:
 # ── Reddit JSON API helpers ───────────────────────────────────────────────────
 
 def _get(path: str, params: dict | None = None):
-    """GET a Reddit JSON endpoint, respecting the public rate limit."""
-    url = path if path.startswith("http") else f"{_BASE}{path}"
-    resp = requests.get(
-        url,
-        params=params,
-        headers={"User-Agent": config.REDDIT_USER_AGENT},
-        timeout=15,
-    )
+    """GET a Reddit JSON endpoint, respecting the public rate limit.
+
+    Uses the OAuth API (oauth.reddit.com) when credentials are configured —
+    this bypasses Reddit's cloud-IP blocks that affect www.reddit.com.
+    Falls back to the unauthenticated public API otherwise.
+    """
+    session = _build_session()
+    if session is not None:
+        # OAuth path — use oauth.reddit.com (not IP-blocked)
+        if path.startswith("http"):
+            # Replace www.reddit.com domain with oauth.reddit.com for known URLs
+            url = path.replace("https://www.reddit.com", _OAUTH_BASE)
+        else:
+            url = f"{_OAUTH_BASE}{path}"
+        # Strip .json suffix — oauth.reddit.com returns JSON by default
+        url = url.removesuffix(".json")
+        resp = session.get(url, params=params, timeout=15)
+    else:
+        # Public API path — may be blocked on cloud IPs
+        url = path if path.startswith("http") else f"{_BASE}{path}"
+        resp = requests.get(
+            url,
+            params=params,
+            headers={"User-Agent": config.REDDIT_USER_AGENT},
+            timeout=15,
+        )
     resp.raise_for_status()
     time.sleep(_RATE_DELAY)
     return resp.json()
